@@ -1,2 +1,2 @@
-# Spectrum-Sensing-using-CNN
+# Spectrum-Sensing-using-ML
 Classifying wireless signals based on modulation type and signal-to-noise ratio (SNR) using Convolution Neural Network CNN , Support Vector Machine SVM and Random Forest RF . It processes signal data into a labeled format and prepares it for use in a model to identify the modulation type from the given signal characteristics. Thus, aimed to provide a comparative analysis based on the improvement in signal classification accuracy of 87% (CNN) , 49%(SVM) , 75% (RF) for better spectrum sensing.
