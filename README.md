@@ -5,3 +5,6 @@ This project consist of classifying wireless signals based on modulation type an
 
 The data set used for the project is RADIOML 2016.10A https://www.deepsig.ai/datasets/
 
+
+Note : The "project implementation.pdf" document reports the accuracy achieved during the initiation phase of the project: 86.46% for CNN, 76.21% for RF, and 49.28% for SVM.
+
