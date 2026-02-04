@@ -240,106 +240,296 @@ if __name__ == "__main__":
 
 
 
-You are a Confluence Knowledge Retrieval Agent.
+import gradio as gr
+from datetime import datetime, timedelta
+from app.orchestrator.orchestrator import Orchestrator
 
-Your task is to:
-1. Search Confluence based on the user question.
-2. Identify relevant page IDs or titles from search results.
-3. Fetch content for ALL relevant pages.
-4. Summarize the information.
-5. Return ALL page links.
+default_log_folder_path = "/var/logs"
+default_from_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+default_to_date = datetime.now().strftime("%Y-%m-%d")
 
-You MUST follow the EXACT format below. This format is STRICT and REQUIRED.
 
----------------- REQUIRED FORMAT ----------------
+def submit(log_folder_path, from_date, to_date, user_query, keyword, previous_response):
 
-Thought: <your reasoning>
+    config = {
+        "log_folder_path": log_folder_path,
+        "from_date": from_date,
+        "to_date": to_date,
+        "user_query": user_query,
+        "keyword": keyword,
+        "previous_response": previous_response,
+    }
 
-Action: <tool name>
+    orchestrator = Orchestrator(config)
+    response = orchestrator.run()
 
-Action Input: "<single-line string argument>"
+    return response, response
 
-Observation: <tool output>
 
-(Repeat Thought/Action/Action Input/Observation until finished)
+def clear():
+    return default_log_folder_path, default_from_date, default_to_date, "", "", "", None
 
-Final Answer:
-Question: <original user question>
-Summary: <final summarized answer from all pages>
-Links:
-- <url1>
-- <url2>
-- <url3>
 
----------------- CRITICAL FORMAT RULES ----------------
+with gr.Blocks() as app:
 
-1. Thought, Action, Action Input, Observation MUST each start on a NEW LINE.
-2. NEVER place Action on the same line as Thought.
-3. NEVER place Action Input on the same line as Action.
-4. NEVER place Observation on the same line as Action Input.
-5. Action Input MUST be a single-line string wrapped in double quotes.
-6. Only call ONE Action per step.
-7. Do NOT output JSON, markdown, bullet lists, or extra formatting in Thought/Action blocks.
-8. Do NOT hallucinate page content. Always call get_page_content before summarizing.
-9. If format is violated, rewrite the response in correct format before continuing.
-10. If search results are irrelevant, refine the search query and search again.
-11. Fetch content for ALL relevant pages found in search results.
+    log_folder_path = gr.Textbox(label="Log Folder Path", value=default_log_folder_path)
 
----------------- TOOL DEFINITIONS ----------------
+    with gr.Row():
+        from_date = gr.DateTime(label="From Date", type="string", include_time=False, value=default_from_date)
+        to_date = gr.DateTime(label="To Date", type="string", include_time=False, value=default_to_date)
+        keyword = gr.Textbox(label="Keyword")
 
-Available tools:
+    user_query = gr.Textbox(label="User Query", lines=5)
 
-search_confluence(query: string)
-get_page_content(page_id_or_title: string)
+    submit_btn = gr.Button("Submit")
+    clear_btn = gr.Button("Clear")
 
----------------- LINK CONSTRUCTION RULE ----------------
+    output = gr.Textbox(label="LLM Response", lines=20)
+    previous_response = gr.State()
 
-If page metadata contains "_Links" with "base" and "webui":
-Construct URL as:
-URL = base + webui
+    submit_btn.click(
+        submit,
+        inputs=[log_folder_path, from_date, to_date, user_query, keyword, previous_response],
+        outputs=[output, previous_response],
+    )
 
-Collect ALL URLs and include them in Final Answer.
+    clear_btn.click(
+        clear,
+        outputs=[log_folder_path, from_date, to_date, user_query, keyword, output, previous_response],
+    )
 
----------------- WORKFLOW RULES ----------------
 
-Step 1: Search using the user question.
-Step 2: Identify relevant page IDs or titles.
-Step 3: Call get_page_content for EACH relevant page.
-Step 4: Summarize across all pages.
-Step 5: Return summary and all links.
+if __name__ == "__main__":
+    app.launch()
 
----------------- EXAMPLE ----------------
 
-Thought: I need to search Confluence based on the user question
 
-Action: search_confluence
 
-Action Input: "trade ticket system"
 
-Observation: Found pages Trade Ticket Overview, Trade Processing Flow
 
-Thought: These pages are relevant, I will fetch the first page content
 
-Action: get_page_content
 
-Action Input: "Trade Ticket Overview"
+import json
+import logging
+from typing import Dict, Any
 
-Observation: Page content retrieved
+from langchain_openai import ChatOpenAI
+from langchain.schema import SystemMessage, HumanMessage
 
-Thought: I should fetch the second relevant page
+from app.orchestrator.graph_runner import run_graph
 
-Action: get_page_content
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-Action Input: "Trade Processing Flow"
 
-Observation: Page content retrieved
+ROUTER_PROMPT = """
+You are an AI routing controller in a multi-agent system.
 
-Thought: I have all information and links, I will summarize and return final answer
+Your job:
+1. Decide which agents should run.
+2. Extract the relevant sub-question for each agent.
 
-Final Answer:
-Question: What is a trade ticket system?
-Summary: <combined summary>
-Links:
-- https://confluence.company/wiki/page1
-- https://confluence.company/wiki/page2
+Agents:
+- wiki_agent: explanations, definitions, tutorials, general knowledge.
+- log_agent: logs, trades, debugging, monitoring, system data.
+- clarify: unclear or missing info.
+
+Return STRICT JSON ONLY:
+
+{
+  "next_agents": ["wiki_agent" | "log_agent" | "clarify"],
+  "agent_inputs": {
+    "wiki_agent": "<trimmed question>",
+    "log_agent": "<trimmed question>"
+  }
+}
+
+Rules:
+- No explanations or markdown.
+- Do not repeat full user query unless necessary.
+- Extract only relevant parts for each agent.
+- If unclear return {"next_agents":["clarify"],"agent_inputs":{}}.
+
+Request Context:
+<CONFIG_JSON>
+"""
+
+
+class Orchestrator:
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.user_query = config.get("user_query", "")
+
+        # Replace with corporate model
+        self.llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0,
+        )
+
+    # ---------- LLM Planner / Router ---------- #
+    def _route(self) -> Dict[str, Any]:
+        messages = [
+            SystemMessage(content=ROUTER_PROMPT),
+            HumanMessage(content=json.dumps(self.config, indent=2)),
+        ]
+
+        response = self.llm.invoke(messages).content
+        logger.info(f"Router output: {response}")
+
+        try:
+            decision = json.loads(response)
+        except Exception:
+            logger.exception("Router JSON parse failed")
+            return {"next_agents": ["clarify"], "agent_inputs": {}}
+
+        # Validate output
+        allowed = {"wiki_agent", "log_agent", "clarify"}
+        decision["next_agents"] = [a for a in decision.get("next_agents", []) if a in allowed]
+        decision.setdefault("agent_inputs", {})
+
+        if not decision["next_agents"]:
+            decision["next_agents"] = ["clarify"]
+
+        return decision
+
+    # ---------- Run LangGraph ---------- #
+    def run(self) -> str:
+        if not self.user_query:
+            return "No user query provided."
+
+        decision = self._route()
+        logger.info(f"Routing decision: {decision}")
+
+        state = {
+            "messages": [{"role": "user", "content": self.user_query}],
+            "decision": decision,
+            "agent_inputs": decision.get("agent_inputs", {}),
+            "partial_answers": {},
+            "final_answer": None,
+            "config": self.config,
+        }
+
+        result = run_graph(state)
+        return result["final_answer"]
+
+
+
+
+
+
+
+# Router node (no logic, orchestrator already decided)
+def router_node(state):
+    return state
+
+
+# ---------------- Wiki Agent ---------------- #
+def wiki_agent_node(state):
+    query = state["agent_inputs"].get("wiki_agent")
+    if not query:
+        return {}
+
+    return {
+        "partial_answers": {
+            **state.get("partial_answers", {}),
+            "wiki_agent": f"Wiki Agent Answer: {query}"
+        }
+    }
+
+
+# ---------------- Log Agent ---------------- #
+def log_agent_node(state):
+    query = state["agent_inputs"].get("log_agent")
+    if not query:
+        return {}
+
+    folder = state["config"].get("log_folder_path")
+
+    return {
+        "partial_answers": {
+            **state.get("partial_answers", {}),
+            "log_agent": f"Log Agent processed '{query}' in folder {folder}"
+        }
+    }
+
+
+# ---------------- Clarify ---------------- #
+def clarify_node(state):
+    return {
+        "final_answer": "Your request is unclear. Please clarify your intent."
+    }
+
+
+# ---------------- Merge ---------------- #
+def merge_node(state):
+    answers = state.get("partial_answers", {})
+
+    if not answers:
+        return {"final_answer": "No agent returned an answer."}
+
+    combined = "\n\n".join(
+        f"### {agent.upper()}\n{answer}"
+        for agent, answer in answers.items()
+    )
+
+    return {"final_answer": combined}
+
+
+
+
+
+
+
+
+
+
+from langgraph.graph import StateGraph, START, END
+from app.orchestrator.nodes import (
+    router_node,
+    wiki_agent_node,
+    log_agent_node,
+    clarify_node,
+    merge_node,
+)
+
+AgentState = dict
+
+workflow = StateGraph(state_schema=AgentState)
+
+workflow.add_node("router", router_node)
+workflow.add_node("wiki_agent", wiki_agent_node)
+workflow.add_node("log_agent", log_agent_node)
+workflow.add_node("clarify", clarify_node)
+workflow.add_node("merge", merge_node)
+
+workflow.add_edge(START, "router")
+
+workflow.add_conditional_edges(
+    "router",
+    lambda s: s["decision"]["next_agents"],
+    {
+        "wiki_agent": "wiki_agent",
+        "log_agent": "log_agent",
+        "clarify": "clarify",
+    },
+)
+
+workflow.add_edge("wiki_agent", "merge")
+workflow.add_edge("log_agent", "merge")
+workflow.add_edge("merge", END)
+workflow.add_edge("clarify", END)
+
+graph = workflow.compile()
+
+
+
+
+
+
+
+
+
+
+
+
 
