@@ -309,167 +309,131 @@ if __name__ == "__main__":
 
 
 
-import json
-import logging
-from typing import Dict, Any
+from typing import Dict, List, Optional
+from pydantic import BaseModel
 
-from langchain_openai import ChatOpenAI
-from langchain.schema import SystemMessage, HumanMessage
 
-from app.orchestrator.graph_runner import run_graph
+class AgentDecision(BaseModel):
+    next_agents: List[str]
+    agent_queries: Dict[str, str]
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+
+class AgentState(BaseModel):
+    messages: list
+    config: dict
+    decision: Optional[AgentDecision] = None
+    partial_answers: Dict[str, str] = {}
+    final_answer: Optional[str] = None
+
+
 
 
 ROUTER_PROMPT = """
-You are an AI routing controller in a multi-agent system.
+You are an enterprise AI router.
 
 Your job:
-1. Decide which agents should run.
-2. Extract the relevant sub-question for each agent.
+1. Decide which agents should answer the user query.
+2. Extract the relevant part of the query for each agent.
 
-Agents:
-- wiki_agent: explanations, definitions, tutorials, general knowledge.
-- log_agent: logs, trades, debugging, monitoring, system data.
-- clarify: unclear or missing info.
+Available agents:
+- wiki_agent → general knowledge, explanations, definitions
+- log_agent → logs, metrics, trades, database queries
+- clarify → if unclear
 
-Return STRICT JSON ONLY:
+Return STRICT JSON:
 
 {
-  "next_agents": ["wiki_agent" | "log_agent" | "clarify"],
-  "agent_inputs": {
-    "wiki_agent": "<trimmed question>",
-    "log_agent": "<trimmed question>"
+  "next_agents": ["wiki_agent", "log_agent"],
+  "agent_queries": {
+     "wiki_agent": "what is block trade",
+     "log_agent": "Did we process block trade no 403245"
   }
 }
 
 Rules:
-- No explanations or markdown.
-- Do not repeat full user query unless necessary.
-- Extract only relevant parts for each agent.
-- If unclear return {"next_agents":["clarify"],"agent_inputs":{}}.
+- DO NOT use keywords heuristics. Use reasoning.
+- Trim irrelevant parts for each agent.
+- If only one agent needed, return only that agent.
+- If unclear, return clarify.
+- Do NOT add commentary outside JSON.
 
-Request Context:
-<CONFIG_JSON>
+User Query:
+{query}
+Config:
+{config}
 """
 
 
-class Orchestrator:
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.user_query = config.get("user_query", "")
-
-        # Replace with corporate model
-        self.llm = ChatOpenAI(
-            model="gpt-4o-mini",
-            temperature=0,
-        )
-
-    # ---------- LLM Planner / Router ---------- #
-    def _route(self) -> Dict[str, Any]:
-        messages = [
-            SystemMessage(content=ROUTER_PROMPT),
-            HumanMessage(content=json.dumps(self.config, indent=2)),
-        ]
-
-        response = self.llm.invoke(messages).content
-        logger.info(f"Router output: {response}")
-
-        try:
-            decision = json.loads(response)
-        except Exception:
-            logger.exception("Router JSON parse failed")
-            return {"next_agents": ["clarify"], "agent_inputs": {}}
-
-        # Validate output
-        allowed = {"wiki_agent", "log_agent", "clarify"}
-        decision["next_agents"] = [a for a in decision.get("next_agents", []) if a in allowed]
-        decision.setdefault("agent_inputs", {})
-
-        if not decision["next_agents"]:
-            decision["next_agents"] = ["clarify"]
-
-        return decision
-
-    # ---------- Run LangGraph ---------- #
-    def run(self) -> str:
-        if not self.user_query:
-            return "No user query provided."
-
-        decision = self._route()
-        logger.info(f"Routing decision: {decision}")
-
-        state = {
-            "messages": [{"role": "user", "content": self.user_query}],
-            "decision": decision,
-            "agent_inputs": decision.get("agent_inputs", {}),
-            "partial_answers": {},
-            "final_answer": None,
-            "config": self.config,
-        }
-
-        result = run_graph(state)
-        return result["final_answer"]
 
 
 
 
 
+import json
+from langchain.schema import HumanMessage
+from .schemas import AgentState, AgentDecision
+from .llm import get_llm
+from .prompts import ROUTER_PROMPT
 
 
-# Router node (no logic, orchestrator already decided)
-def router_node(state):
-    return state
+llm = get_llm()
+
+# =====================================================
+# Router Node
+# =====================================================
+def router_node(state: AgentState) -> dict:
+    user_query = state.messages[0].content
+    config = state.config
+
+    prompt = ROUTER_PROMPT.format(query=user_query, config=config)
+    response = llm.invoke(prompt).content
+
+    decision_json = json.loads(response)
+    decision = AgentDecision(**decision_json)
+
+    return {"decision": decision}
 
 
-# ---------------- Wiki Agent ---------------- #
-def wiki_agent_node(state):
-    query = state["agent_inputs"].get("wiki_agent")
-    if not query:
-        return {}
+# =====================================================
+# Wiki Agent
+# =====================================================
+def wiki_agent_node(state: AgentState) -> dict:
+    query = state.decision.agent_queries["wiki_agent"]
+    result = f"Wiki Agent Answer:\n(simulated explanation for '{query}')"
 
+    return {"partial_answers": {**state.partial_answers, "wiki_agent": result}}
+
+
+# =====================================================
+# Log Agent
+# =====================================================
+def log_agent_node(state: AgentState) -> dict:
+    query = state.decision.agent_queries["log_agent"]
+    result = f"Log Agent Result:\n(simulated logs lookup for '{query}')"
+
+    return {"partial_answers": {**state.partial_answers, "log_agent": result}}
+
+
+# =====================================================
+# Clarify Node
+# =====================================================
+def clarify_node(state: AgentState) -> dict:
     return {
-        "partial_answers": {
-            **state.get("partial_answers", {}),
-            "wiki_agent": f"Wiki Agent Answer: {query}"
-        }
+        "final_answer": "Your query is unclear. Please clarify what you want."
     }
 
 
-# ---------------- Log Agent ---------------- #
-def log_agent_node(state):
-    query = state["agent_inputs"].get("log_agent")
-    if not query:
-        return {}
-
-    folder = state["config"].get("log_folder_path")
-
-    return {
-        "partial_answers": {
-            **state.get("partial_answers", {}),
-            "log_agent": f"Log Agent processed '{query}' in folder {folder}"
-        }
-    }
-
-
-# ---------------- Clarify ---------------- #
-def clarify_node(state):
-    return {
-        "final_answer": "Your request is unclear. Please clarify your intent."
-    }
-
-
-# ---------------- Merge ---------------- #
-def merge_node(state):
-    answers = state.get("partial_answers", {})
+# =====================================================
+# Merge Node
+# =====================================================
+def merge_node(state: AgentState) -> dict:
+    answers = state.partial_answers
 
     if not answers:
         return {"final_answer": "No agent returned an answer."}
 
     combined = "\n\n".join(
-        f"### {agent.upper()}\n{answer}"
-        for agent, answer in answers.items()
+        f"### {agent.upper()}\n{answer}" for agent, answer in answers.items()
     )
 
     return {"final_answer": combined}
@@ -480,56 +444,70 @@ def merge_node(state):
 
 
 
-
-
-
 from langgraph.graph import StateGraph, START, END
-from app.orchestrator.nodes import (
+from .schemas import AgentState
+from .nodes import (
     router_node,
     wiki_agent_node,
     log_agent_node,
     clarify_node,
-    merge_node,
+    merge_node
 )
 
-AgentState = dict
 
-workflow = StateGraph(state_schema=AgentState)
-
-workflow.add_node("router", router_node)
-workflow.add_node("wiki_agent", wiki_agent_node)
-workflow.add_node("log_agent", log_agent_node)
-workflow.add_node("clarify", clarify_node)
-workflow.add_node("merge", merge_node)
-
-workflow.add_edge(START, "router")
-
-workflow.add_conditional_edges(
-    "router",
-    lambda s: s["decision"]["next_agents"],
-    {
-        "wiki_agent": "wiki_agent",
-        "log_agent": "log_agent",
-        "clarify": "clarify",
-    },
-)
-
-workflow.add_edge("wiki_agent", "merge")
-workflow.add_edge("log_agent", "merge")
-workflow.add_edge("merge", END)
-workflow.add_edge("clarify", END)
-
-graph = workflow.compile()
+def route_after_router(state: AgentState):
+    return state.decision.next_agents
 
 
+def build_graph():
+    workflow = StateGraph(state_schema=AgentState)
 
+    workflow.add_node("router", router_node)
+    workflow.add_node("wiki_agent", wiki_agent_node)
+    workflow.add_node("log_agent", log_agent_node)
+    workflow.add_node("clarify", clarify_node)
+    workflow.add_node("merge", merge_node)
 
+    workflow.add_edge(START, "router")
 
+    workflow.add_conditional_edges(
+        "router",
+        route_after_router,
+        {
+            "wiki_agent": "wiki_agent",
+            "log_agent": "log_agent",
+            "clarify": "clarify"
+        }
+    )
 
+    workflow.add_edge("wiki_agent", "merge")
+    workflow.add_edge("log_agent", "merge")
+    workflow.add_edge("merge", END)
+    workflow.add_edge("clarify", END)
+
+    return workflow.compile()
 
 
 
 
+from langchain.schema import HumanMessage
+from .graph import build_graph
 
 
+class Orchestrator:
+    def __init__(self):
+        self.graph = build_graph()
 
+    def run(self, config: dict):
+        query = config["user_query"]
+
+        state = {
+            "messages": [HumanMessage(content=query)],
+            "config": config,
+            "decision": None,
+            "partial_answers": {},
+            "final_answer": None
+        }
+
+        result = self.graph.invoke(state)
+        return result["final_answer"]
