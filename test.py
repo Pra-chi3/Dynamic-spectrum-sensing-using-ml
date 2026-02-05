@@ -511,3 +511,49 @@ class Orchestrator:
 
         result = self.graph.invoke(state)
         return result["final_answer"]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+from typing import List
+from pydantic import BaseModel, Field
+from langchain_core.tools import tool
+from datetime import datetime
+
+class GetLogsInput(BaseModel):
+    from_date: str = Field(..., description="YYYY-MM-DD")
+    to_date: str = Field(..., description="YYYY-MM-DD")
+    keywords: List[str] = Field(..., description="Keywords to filter logs")
+
+
+class LogAnalyzerTools(LogFileSource):
+    def __init__(self, settings):
+        super().__init__(settings)
+        self.settings = settings
+
+    def _get_relevant_logs(self, from_date, to_date, keywords):
+        return self.get_relevant_logs(from_date, to_date, keywords)
+
+
+log_tool_instance = LogAnalyzerTools(settings)
+
+
+@tool(args_schema=GetLogsInput)
+def get_relevant_logs(from_date: str, to_date: str, keywords: List[str]) -> str:
+    """Get relevant logs between dates filtered by keywords"""
+
+    from_date_obj = datetime.strptime(from_date, "%Y-%m-%d")
+    to_date_obj = datetime.strptime(to_date, "%Y-%m-%d")
+
+    return log_tool_instance._get_relevant_logs(from_date_obj, to_date_obj, keywords)
+
