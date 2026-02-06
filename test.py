@@ -1,6 +1,6 @@
 """
-RLM Certificate Fix - Ready to Run Script
-Combines multiple solutions to fix the connection error
+RLM Certificate Fix - CORRECTED VERSION
+Fixes the attribute error and query parameter issues
 """
 
 import os
@@ -99,7 +99,7 @@ def setup_rlm_with_fixes():
         raise
 
 # ============================================================================
-# Test Functions
+# Test Functions - CORRECTED
 # ============================================================================
 
 def test_basic_completion(rlm):
@@ -108,15 +108,19 @@ def test_basic_completion(rlm):
     print("TEST 1: Basic Completion")
     print("="*70)
     
-    query = "What is 2+2? Answer in one sentence."
-    print(f"Query: {query}\n")
+    # Simple prompt - RLM expects just a string, not 'query' parameter
+    prompt = "What is 2+2? Answer in one sentence."
+    print(f"Prompt: {prompt}\n")
     
     try:
-        result = rlm.completion(query)
+        # CORRECTED: Pass prompt directly, not as query=
+        result = rlm.completion(prompt)
         print(f"✓ Response: {result.response}\n")
         return True
     except Exception as e:
         print(f"✗ Failed: {e}\n")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -133,16 +137,22 @@ def test_with_context(rlm):
     Natural Language Processing helps computers understand human language.
     """
     
-    query = "What are the AI technologies mentioned?"
-    print(f"Query: {query}")
-    print(f"Context provided: {len(context)} characters\n")
+    # CORRECTED: Include context in the prompt itself
+    prompt = f"""Context:
+{context}
+
+Question: What are the AI technologies mentioned in the context above?"""
+    
+    print(f"Prompt length: {len(prompt)} characters\n")
     
     try:
-        result = rlm.completion(query=query, context=context)
+        result = rlm.completion(prompt)
         print(f"✓ Response: {result.response}\n")
         return True
     except Exception as e:
         print(f"✗ Failed: {e}\n")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -152,15 +162,17 @@ def test_code_generation(rlm):
     print("TEST 3: Code Generation")
     print("="*70)
     
-    query = "Write a Python function to calculate factorial. Show the code."
-    print(f"Query: {query}\n")
+    prompt = "Write a Python function to calculate factorial. Show the code."
+    print(f"Prompt: {prompt}\n")
     
     try:
-        result = rlm.completion(query)
+        result = rlm.completion(prompt)
         print(f"✓ Response: {result.response}\n")
         return True
     except Exception as e:
         print(f"✗ Failed: {e}\n")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -170,15 +182,17 @@ def test_recursive_task(rlm):
     print("TEST 4: Recursive Processing")
     print("="*70)
     
-    query = "List the first 20 prime numbers."
-    print(f"Query: {query}\n")
+    prompt = "List the first 20 prime numbers."
+    print(f"Prompt: {prompt}\n")
     
     try:
-        result = rlm.completion(query)
+        result = rlm.completion(prompt)
         print(f"✓ Response: {result.response}\n")
         return True
     except Exception as e:
         print(f"✗ Failed: {e}\n")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -200,6 +214,8 @@ def main():
     except Exception as e:
         print(f"Setup failed. Please check your configuration.")
         print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
         return
     
     # Run tests
@@ -216,6 +232,8 @@ def main():
             results[test_name] = test_func(rlm)
         except Exception as e:
             print(f"✗ {test_name} crashed: {e}\n")
+            import traceback
+            traceback.print_exc()
             results[test_name] = False
     
     # Print summary
@@ -243,17 +261,61 @@ def main():
 
 
 # ============================================================================
-# Quick Start Example
+# Alternative: Direct OpenAI Client Test (No RLM)
+# ============================================================================
+
+def test_direct_openai():
+    """
+    Test the endpoint directly with OpenAI client (bypass RLM)
+    This helps verify the certificate fix works
+    """
+    print("\n" + "="*70)
+    print("DIRECT OPENAI CLIENT TEST (No RLM)")
+    print("="*70 + "\n")
+    
+    try:
+        # Create client with certificate
+        client = OpenAI(
+            api_key=API_KEY,
+            base_url=BASE_URL,
+            http_client=httpx.Client(verify=CERT_PATH)
+        )
+        
+        print("Sending test request...")
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": "What is 2+2?"}],
+            temperature=TEMPERATURE
+        )
+        
+        print(f"✓ Success!")
+        print(f"Response: {response.choices[0].message.content}\n")
+        return True
+        
+    except Exception as e:
+        print(f"✗ Failed: {e}\n")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+# ============================================================================
+# Quick Start Example - Minimal Code
 # ============================================================================
 
 def quick_start():
     """
-    Minimal example for quick testing
+    Minimal working example - just the essentials
     """
-    # Apply fixes
+    print("\n" + "="*70)
+    print("QUICK START - MINIMAL EXAMPLE")
+    print("="*70 + "\n")
+    
+    # Apply certificate fixes
     os.environ['SSL_CERT_FILE'] = CERT_PATH
     os.environ['REQUESTS_CA_BUNDLE'] = CERT_PATH
     
+    # Monkey-patch OpenAI
     class CertOpenAI(OpenAI):
         def __init__(self, *args, **kwargs):
             if 'http_client' not in kwargs:
@@ -276,8 +338,9 @@ def quick_start():
     )
     
     # Test it
-    result = rlm.completion("What is machine learning?")
-    print(result.response)
+    print("Testing: What is machine learning?\n")
+    result = rlm.completion("What is machine learning? Answer in 2 sentences.")
+    print(f"Response: {result.response}\n")
 
 
 # ============================================================================
@@ -285,8 +348,21 @@ def quick_start():
 # ============================================================================
 
 if __name__ == "__main__":
-    # Run full test suite
-    main()
+    # First, test direct OpenAI connection
+    print("Step 1: Testing direct OpenAI client...")
+    if test_direct_openai():
+        print("✓ Direct connection works! Proceeding with RLM tests...\n")
+        
+        # Run full RLM test suite
+        main()
+        
+    else:
+        print("✗ Direct connection failed. Fix certificate configuration first.")
+        print("Check:")
+        print("  1. Certificate path is correct")
+        print("  2. Certificate file is readable")
+        print("  3. API key is valid")
+        print("  4. Base URL is correct")
     
-    # Or run quick start only:
+    # Or run just quick start:
     # quick_start()
