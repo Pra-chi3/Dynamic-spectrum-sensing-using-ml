@@ -366,3 +366,36 @@ if __name__ == "__main__":
     
     # Or run just quick start:
     # quick_start()
+
+
+
+
+
+
+
+user_query_within_context_prompt = """
+You must decide whether the user query is answerable within the application scope.
+
+Context:
+- The application overview defines what the system is designed to handle.
+- The orchestrator role defines your responsibilities and constraints.
+
+Instructions:
+1. Determine if the user query is related to the application domain.
+2. If it is clearly within scope, set "is_in_scope" to true.
+3. If it is unrelated, vague, or requires capabilities outside the system, set "is_in_scope" to false.
+4. Provide a concise reason.
+
+Return STRICT JSON ONLY in this format:
+{
+  "is_in_scope": true | false,
+  "reason": "<short explanation>"
+}
+
+Rules:
+- Do NOT explain outside JSON.
+- Do NOT include markdown.
+- Be conservative: if unsure, mark as out of scope.
+- Do NOT hallucinate system capabilities.
+"""
+
